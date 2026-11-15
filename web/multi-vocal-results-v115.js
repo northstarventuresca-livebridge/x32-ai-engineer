@@ -349,4 +349,185 @@ async function start(){
    processor.onaudioprocess=e=>{
     if(job!==j||j.abort.signal.aborted)return;
     for(const info of initial.filter(x=>x.pair===pair)){
-     if(e.inputBuffer.numberOfChannels<=info.lane){const t=j.tracks.get(info.n);if(t&&!t.done){t.done=true;card(info.n).inf --- TRUNCATED --- 33,446 chars
+     if(e.inputBuffer.numberOfChannels<=info.lane){const t=j.tracks.get(info.n);if(t&&!t.done){t.done=true;card(info.n).info.textContent='Stereo channel not present in DVS device';finishIfDone(j)}continue}
+     ingest(j,j.tracks.get(info.n),e.inputBuffer.getChannelData(info.lane),j.ctx.sampleRate);
+    }
+   };
+  }
+  for(const info of initial)j.tracks.set(info.n,{n:info.n,done:false,captured:false,samples:[],noise:-92,started:false,tries:0,activeSec:0,maxPeak:-120,phase:0,sum:0,count:0});
+  await j.ctx.resume();
+  if(job!==j)return;
+  status('Listening to '+j.channels.length+' independent Dante microphones · '+j.mode+(j.useRoom?' · optional room full-mix context ON':' · room mic OFF')+'. Waiting for clear vocal samples…');
+  j.clock=setInterval(()=>{
+   if(job!==j)return;
+   const running=[...j.tracks.values()].filter(t=>!t.done&&!t.captured);
+   if(running.length)status('Listening · '+running.length+' microphone(s) still gathering clear samples; analyzed channels appear below as they finish.');
+  },3000);
+  j.timeout=setTimeout(()=>{
+   if(job!==j)return;
+   for(const t of j.tracks.values())if(!t.done&&!t.captured){
+    t.done=true;t.captured=true;t.samples=[];const c=card(t.n);
+    c.info.textContent='No sufficiently strong microphone sample in 75 seconds';
+    c.notes.textContent='Not analyzed; microphone quiet or vocal not confidently above noise/bleed. No changes proposed.';
+    c.apply.disabled=true;
+   }
+   finishIfDone(j);
+  },75000);
+ }catch(e){
+  if(job!==j)return;
+  status('Multi-channel capture unavailable: '+String(e.message||e));
+  for(const t of j.tracks.values())t.done=true;
+  destroyAudio(j);job=null;updateOptions();
+ }
+}
+function stop(){
+ if(!job)return;
+ const j=job;job=null;sessionId++;j.abort.abort();destroyAudio(j);
+ for(const t of j.tracks.values())if(!t.done)card(t.n).info.textContent='Stopped by operator · no new EQ suggestion';
+ status('Stopped listening to all selected channels. No mixer changes.');
+ updateOptions();
+}
+function sameEq(a,b){
+ if(!a||!b||!Array.isArray(a.bands)||!Array.isArray(b.bands)||a.bands.length!==4||b.bands.length!==4)return false;
+ if(a.hpf?.on!==b.hpf?.on)return false;
+ if(a.hpf?.on&&Math.abs(a.hpf.frequencyHz-b.hpf.frequencyHz)>Math.max(2,a.hpf.frequencyHz*.015))return false;
+ return a.bands.every((x,i)=>{
+  const y=b.bands[i];return x.type===y.type&&
+   Math.abs(x.frequencyHz-y.frequencyHz)<=Math.max(3,x.frequencyHz*.018)&&
+   Math.abs(x.gainDb-y.gainDb)<=.24&&Math.abs(x.q-y.q)<=.04;
+ });
+}
+async function applyOne(n,button,info){
+ if(job||applying)return;
+ const c=cards.get(n),r=c?.report;
+ if(!r?.reviewComplete||!r.voiceDetected||r.confidence==='low'||r.channel!==n||!Array.isArray(r.suggestions)||r.suggestions.length!==4){
+  info.textContent='No eligible verified voice recommendation for this channel';return;
+ }
+ applying=true;updateOptions();button.disabled=true;
+ try{
+  const st=await bridge('/api/eq/status?channel='+n);
+  if(st.writesEnabled!==true||!['EQ-CHANNELS-01-32-V8','AUTO-ROOM-POST-EQ-V109'].includes(st.bridgeVersion))throw Error('Verified Windows X32 bridge v8 required');
+  const prepared=await bridge('/api/eq/prepare?channel='+n);
+  if(!sameEq(c.baseline,prepared.current))throw Error('CH'+n+' EQ has changed since listening. Re-analyze before applying.');
+  const suggestions=r.suggestions;
+  if(suggestions.length!==4||new Set(suggestions.map(x=>x.band)).size!==4)throw Error('Complete four-band voice review required');
+  const changes=suggestions.map(x=>({band:x.band,type:x.type,frequencyHz:x.frequencyHz,gainDb:x.gainDb,q:x.q}));
+  const confirmText='APPLY THE FOUR SUGGESTED EQ BANDS TO PHYSICAL X32 CH'+n+' ('+channelName(n)+')?\n\n'+
+   changes.map(x=>'Band '+x.band+': '+Math.round(x.frequencyHz)+' Hz / '+x.gainDb+' dB / Q '+Number(x.q).toFixed(2)).join('\n')+
+   '\n\nChanges affect ONLY CH'+n+'. A channel-specific original backup is retained. This is not a verified post-EQ audio analysis.';
+  if(!window.confirm(confirmText)){info.textContent='Operator cancelled. Mixer unchanged.';return;}
+  info.textContent='Applying EQ only to CH'+n+'; waiting for verified X32 readback…';
+  await bridge('/api/eq/apply','POST',{channel:n,nonce:prepared.nonce,recommendations:changes,speed:'instant',ack:'CONFIRM_REAL_X32_EQ_WRITE'});
+  let complete=false;
+  for(let attempt=0;attempt<45;attempt++){
+   await new Promise(resolve=>setTimeout(resolve,1000));
+   const check=await bridge('/api/eq/status?channel='+n);
+   const j=check.job||{};
+   if(j.channel!==n)throw Error('A different X32 EQ operation became active');
+   if(j.status==='verified'){
+    const verified=j.verified;
+    if(!verified?.bands?.length)throw Error('Verified mixer readback missing');
+    info.textContent='CH'+n+' EQ applied and VERIFIED by mixer readback. Audio post-EQ tap remains unverified.';
+    complete=true;break;
+   }
+   if(['failed','stopped'].includes(j.status))throw Error(j.error||'Mixer did not verify this EQ write. Restore may be available.');
+  }
+  if(!complete)throw Error('EQ operation not verified within 45 seconds. Check local bridge before further writes.');
+ }catch(e){info.textContent='Apply unavailable: '+String(e.message||e);}
+ finally{applying=false;if(c?.report?.reviewComplete&&c.report.voiceDetected&&c.report.confidence!=='low')button.disabled=false;updateOptions();}
+}
+/* V110: unified interface controller, inside the existing multi-vocal engine closure. */
+let unifiedMode='idle',unifiedTimer=null,unifiedGeneration=0,unifiedWrites=new Map(),unifiedLastWrite=new Map();
+const unifiedPause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+function unifiedSchedule(g){
+  if(g!==unifiedGeneration||!['live','auto'].includes(unifiedMode))return;
+  clearTimeout(unifiedTimer);
+  unifiedTimer=setTimeout(()=>{
+    if(g!==unifiedGeneration||!['live','auto'].includes(unifiedMode))return;
+    if(!job&&!applying)start();else unifiedSchedule(g);
+  },35000);
+}
+async function unifiedAutoPass(channels,g){
+  if(g!==unifiedGeneration||unifiedMode!=='auto')return;
+  applying=true;updateOptions();
+  try{
+    for(const n of channels){
+      if(g!==unifiedGeneration||unifiedMode!=='auto')return;
+      if((unifiedWrites.get(n)||0)>=2||Date.now()-(unifiedLastWrite.get(n)||0)<90000)continue;
+      const c=cards.get(n),r=c?.report;
+      if((r?.roomMicUsed===true&&r?.roomAnalysisStatus!=='complete')||!c?.baseline||r?.voiceDetected!==true||r?.confidence!=='high'||r?.reviewComplete!==true||r?.channel!==n||!Array.isArray(r.suggestions))continue;
+      const candidate=r.suggestions.map(x=>{
+        const old=c.baseline.bands[x?.band-1];
+        if(!old||x.type!=='PEQ'||old.type!=='PEQ'||old.q>2.5||old.gainDb<=-9||
+          !Number.isFinite(x.frequencyHz)||!Number.isFinite(x.gainDb)||!Number.isFinite(x.q)||
+          Math.abs(Math.log2(x.frequencyHz/old.frequencyHz))>.14||
+          Math.abs(x.q-old.q)>.22||x.gainDb>old.gainDb-.7)return null;
+        return {band:x.band,type:old.type,frequencyHz:old.frequencyHz,
+          gainDb:Math.max(-9,Math.round((old.gainDb-.5)*10)/10),q:old.q};
+      }).find(Boolean);
+      if(!candidate)continue;
+      try{
+        const st=await bridge('/api/eq/status?channel='+n);
+        if(st.writesEnabled!==true||!['EQ-CHANNELS-01-32-V8','AUTO-ROOM-POST-EQ-V109'].includes(st.bridgeVersion))
+          throw Error('Updated verified Windows EQ bridge required');
+        const prep=await bridge('/api/eq/prepare?channel='+n);
+        if(g!==unifiedGeneration||unifiedMode!=='auto')return;
+        if(!sameEq(c.baseline,prep.current)){c.info.textContent='Mixer EQ changed since analysis. Automatic write skipped.';continue}
+        c.info.textContent='Auto EQ: applying a gentle verified cut to CH'+n+'…';
+        await bridge('/api/eq/apply','POST',{channel:n,nonce:prep.nonce,recommendations:[candidate],speed:'slow',ack:'CONFIRM_REAL_X32_EQ_WRITE'});
+        let verified=false;
+        for(let i=0;i<55;i++){
+          if(g!==unifiedGeneration||unifiedMode!=='auto'){
+            try{await bridge('/api/eq/stop','POST',{})}catch{}
+            return;
+          }
+          await unifiedPause(1000);
+          const state=await bridge('/api/eq/status?channel='+n),w=state.job||{};
+          if(w.channel!==n)throw Error('Another X32 EQ write interrupted this channel');
+          if(w.status==='verified'){verified=true;break;}
+          if(['failed','stopped'].includes(w.status))throw Error(w.error||'Mixer did not verify EQ');
+        }
+        if(!verified)throw Error('No verified mixer EQ readback');
+        unifiedWrites.set(n,(unifiedWrites.get(n)||0)+1);
+        unifiedLastWrite.set(n,Date.now());
+        c.info.textContent='✓ CH'+n+' automatic EQ verified on mixer (one gentle cut).';
+      }catch(e){
+        c.info.textContent='Auto EQ paused for CH'+n+': '+String(e.message||e);
+        unifiedMode='idle';
+        return;
+      }
+    }
+  }finally{applying=false;updateOptions();}
+}
+async function unifiedCompleted(j){
+  const g=unifiedGeneration;
+  if(!['live','auto'].includes(unifiedMode))return;
+  if(unifiedMode==='auto')await unifiedAutoPass(j.channels,g);
+  unifiedSchedule(g);
+}
+window.X32UnifiedEngine={
+  selected:()=>[...selected].sort((a,b)=>a-b),
+  max:MAX,
+  active:()=>unifiedMode,
+  start:(kind,analysis)=>{
+    if(!['check','live','auto'].includes(kind))throw Error('Invalid mode');
+    if(!selected.size)throw Error('Select one or more microphones');
+    if(job)stop();
+    if(applying)throw Error('An EQ change is still finishing');
+    clearTimeout(unifiedTimer);unifiedGeneration++;
+    unifiedMode=kind;unifiedWrites.clear();unifiedLastWrite.clear();
+    $('x32-multi-mode').value=analysis==='singing'?'singing':'speaking';
+    cards.clear();$('x32-multi-results').replaceChildren();
+    start();
+  },
+  stop:()=>{
+    unifiedMode='idle';unifiedGeneration++;clearTimeout(unifiedTimer);stop();
+    if(applying)bridge('/api/eq/stop','POST',{}).catch(()=>{});
+  },
+  busy:()=>!!job||applying
+};
+$('x32-multi-go').onclick=start;
+$('x32-multi-stop').onclick=stop;
+window.addEventListener('beforeunload',stop);
+updateOptions();
+})();
