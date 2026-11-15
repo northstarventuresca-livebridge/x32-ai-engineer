@@ -198,6 +198,7 @@ async function start(){
    const dev=sources.find(d=>labelPair(d.label,pair));
    if(!dev)throw Error('DVS Receive '+pair+'-'+(pair+1)+' missing. Verify Windows Dante input mapping.');
    const stream=await navigator.mediaDevices.getUserMedia({audio:{deviceId:{exact:dev.deviceId},channelCount:2,autoGainControl:false,echoCancellation:false,noiseSuppression:false}});
+   if(job!==j){stream.getTracks().forEach(track=>track.stop());return;}
    j.streams.push(stream);
    const input=j.ctx.createMediaStreamSource(stream),processor=j.ctx.createScriptProcessor(4096,2,1),mute=j.ctx.createGain();
    mute.gain.value=0;input.connect(processor);processor.connect(mute);mute.connect(j.ctx.destination);
@@ -245,7 +246,7 @@ function stop(){
 }
 function sameEq(a,b){
  if(!a||!b||!Array.isArray(a.bands)||!Array.isArray(b.bands)||a.bands.length!==4||b.bands.length!==4)return false;
- if(a.eqOn!==b.eqOn||a.hpf?.on!==b.hpf?.on)return false;
+ if(a.hpf?.on!==b.hpf?.on)return false;
  if(a.hpf?.on&&Math.abs(a.hpf.frequencyHz-b.hpf.frequencyHz)>Math.max(2,a.hpf.frequencyHz*.015))return false;
  return a.bands.every((x,i)=>{
   const y=b.bands[i];return x.type===y.type&&
@@ -256,7 +257,7 @@ function sameEq(a,b){
 async function applyOne(n,button,info){
  if(job||applying)return;
  const c=cards.get(n),r=c?.report;
- if(!r?.reviewComplete||!r.voiceDetected||r.confidence==='low'||r.channel!==n||!sameEq(c.baseline,c.baseline)){
+ if(!r?.reviewComplete||!r.voiceDetected||r.confidence==='low'||r.channel!==n||!Array.isArray(r.suggestions)||r.suggestions.length!==4){
   info.textContent='No eligible verified voice recommendation for this channel';return;
  }
  applying=true;updateOptions();button.disabled=true;
@@ -290,7 +291,7 @@ async function applyOne(n,button,info){
   }
   if(!complete)throw Error('EQ operation not verified within 45 seconds. Check local bridge before further writes.');
  }catch(e){info.textContent='Apply unavailable: '+String(e.message||e);}
- finally{applying=false;updateOptions();}
+ finally{applying=false;if(c?.report?.reviewComplete&&c.report.voiceDetected&&c.report.confidence!=='low')button.disabled=false;updateOptions();}
 }
 $('x32-multi-go').onclick=start;
 $('x32-multi-stop').onclick=stop;
