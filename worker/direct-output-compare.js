@@ -80,11 +80,12 @@ async function x32CompareOutput(request,env){
  }
  const detected=model.voiceDetected===true,confidence=['low','medium','high'].includes(model.confidence)?model.confidence:'low',suggestions=Array.isArray(model.suggestions)?model.suggestions:[];
  const complete=suggestions.length===4&&new Set(suggestions.map(x=>x?.band)).size===4&&suggestions.every(x=>x&&Number.isInteger(x.band)&&x.band>=1&&x.band<=4&&types.includes(x.type)&&!(x.band===4&&x.type==='LCut')&&Number.isFinite(x.frequencyHz)&&x.frequencyHz>=20&&x.frequencyHz<=20000&&Number.isFinite(x.gainDb)&&x.gainDb>=-15&&x.gainDb<=15&&Number.isFinite(x.q)&&x.q>=.3&&x.q<=10);
- const ready=detected&&confidence!=='low'&&outputAssessment.sameSourceLikely&&complete;
- if(detected&&confidence!=='low'&&outputAssessment.sameSourceLikely&&!complete){await unlock();return reply({error:'AI failed to provide complete safe numeric EQ suggestions; no Apply enabled'},502)}
+ const ready=detected&&confidence!=='low'&&outputAssessment.sameSourceLikely&&source.userConfirmed===true&&complete;
+ if(detected&&confidence!=='low'&&outputAssessment.sameSourceLikely&&source.userConfirmed===true&&!complete){await unlock();return reply({error:'AI failed to provide complete safe numeric EQ suggestions; no Apply enabled'},502)}
  const safeWarnings=['A separate output recording was compared with the direct mic. Its EQ tap position is operator-declared but NOT verified by X32 routing readback.','EQ filter overlays are modeled, not calibrated room or PA frequency responses.'];
  if(room)safeWarnings.push('Room captures full PA and crowd; during worship it cannot verify a particular vocalist in isolation.');
  if(!outputAssessment.sameSourceLikely)safeWarnings.push('AI could not establish that output and direct mic are the same voice; EQ Apply is disabled.');
+ if(source.userConfirmed!==true)safeWarnings.push('The operator has not confirmed that this Dante receive lane is the selected post-EQ channel. EQ Apply remains disabled.');
  return reply({channel:ch,analysisMode:data.analysisMode,voiceDetected:detected,confidence,summary:text(model.summary),audibleFindings:Array.isArray(model.audibleFindings)?model.audibleFindings.slice(0,4).map(text):[],bandReviews:Array.isArray(model.bandReviews)?model.bandReviews.filter(x=>Number.isInteger(x.band)&&x.band>=1&&x.band<=4).slice(0,4).map(x=>({band:x.band,assessment:text(x.assessment)})):[],hpfReview:text(model.hpfReview),hpfSuggestion:null,
   suggestions:ready?suggestions.sort((x,y)=>x.band-y.band).map(x=>({band:x.band,type:x.type,frequencyHz:x.frequencyHz,gainDb:x.gainDb,q:x.q,reason:text(x.reason)})):[],
   previewSuggestions:ready?suggestions:[],reviewComplete:ready,analysisBasis:'real_voice_audio',targetMethod:'direct_output_room_audio_comparison',currentSettingsUsedForTarget:true,
