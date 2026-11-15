@@ -164,7 +164,7 @@ function finishIfDone(j){
    const noChanges=states.filter(x=>x==='nochanges').length;
    const changed=states.filter(x=>x==='changed').length;
    const message=failed||incomplete?
-      'Analysis finished with '+(failed+incomplete)+' incomplete/failed channel(s). No EQ verdict for those channels. See results below.':
+      'Analysis Failed or Incomplete on '+(failed+incomplete)+' microphone(s). No EQ verdict for those channels. See results below.':
       noChanges===states.length?'EQ Check Complete — No Changes Recommended for the selected microphones.':
       'EQ Check Complete — '+changed+' channel(s) with suggestions, '+noChanges+' with no EQ changes recommended.';
    status(message);updateOptions();
