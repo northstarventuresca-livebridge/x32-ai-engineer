@@ -72,8 +72,8 @@ function x32CompareResults(c,data,reliable){
   if(typeof review?.reason==='string'&&review.reason.trim())card.append(make('p','x32-dyn-reason',review.reason));
   return card;
  };
- dynamics.append(draw('Gate',c.baseline?.gate||d?.gate?.current,d?.gate,'gate'));
- dynamics.append(draw('Compressor',c.baseline?.compressor||d?.compressor?.current,d?.compressor,'compressor'));
+ dynamics.append(draw('Gate',Object.assign({},c.baseline?.gate||{},d?.gate?.current||{}),d?.gate,'gate'));
+ dynamics.append(draw('Compressor',Object.assign({},c.baseline?.compressor||{},d?.compressor?.current||{}),d?.compressor,'compressor'));
  if(d?.limitations)dynamics.append(make('p','x32-compare-help',d.limitations));
  box.append(dynamics);c.notes.after(box);
  const overlay=c.el.querySelector('.x32-multi-overlay');
