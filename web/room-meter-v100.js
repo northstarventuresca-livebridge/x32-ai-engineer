@@ -37,7 +37,7 @@ async function scan(){
  for(const d of dvs){
   const option=document.createElement('option');option.value=d.deviceId;option.textContent=d.label||'DVS microphone device';select.appendChild(option);
  }
- const remembered=select.querySelector('option[value="'+CSS.escape(deviceId)+'"]');
+ const remembered=Array.from(select.options).find(o=>o.value===deviceId);
  if(deviceId&&remembered)select.value=deviceId;
  else{
   const candidate=dvs.find(d=>/Receive\s*3\s*[-–]\s*4|Rx\s*3\s*[-–]\s*4/i.test(d.label));
@@ -98,12 +98,13 @@ function snapshot(){
  for(let i=0;i<count;i++)samples[i]=ring[(cursor-count+i+CAP)%CAP];
  return wav(samples);
 }
-function switchChecked(enabled){
+function switchChecked(enabled,origin){
+ const near=origin?.closest('label');if(near)near.after(U);
  for(const c of checks)c.checked=enabled;
  U.style.display=enabled?'block':'none';
  if(enabled)ensure().catch(()=>{});else stop();
 }
-for(const c of checks)c.addEventListener('change',()=>switchChecked(c.checked));
+for(const c of checks)c.addEventListener('change',()=>switchChecked(c.checked,c));
 select.addEventListener('change',()=>{deviceId=select.value;if(checks.some(c=>c.checked)){endAudio();ensure().catch(()=>{})}});
 lane.addEventListener('change',()=>{if(active){clearRing();label('Room lane changed. Confirm meter response and gather 8 seconds of audio.');}});
 $('x32-room-refresh').onclick=()=>{scan().then(()=>{if(checks.some(c=>c.checked)){endAudio();ensure().catch(()=>{})}}).catch(e=>label(e.message))};
