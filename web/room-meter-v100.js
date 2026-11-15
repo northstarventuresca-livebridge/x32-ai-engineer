@@ -6,7 +6,7 @@
 'use strict';
 if(window.X32RoomInput)return;
 const RATE=16000,CAP=RATE*20;
-const checks=['x32-single-room','x32-multi-room'].map(id=>document.getElementById(id)).filter(Boolean);
+const checks=['x32-single-room','x32-multi-room','x32-playback-room'].map(id=>document.getElementById(id)).filter(Boolean);
 const U=document.createElement('section');
 U.id='x32-room-meter';U.style.cssText='border:1px solid #416270;border-radius:9px;background:#102936;padding:10px;margin:10px 0;display:none;font-size:12px;color:#c6e8eb';
 U.innerHTML='<strong>Room mic · X32 CH28 / physical Input 15</strong>'+
