@@ -162,14 +162,15 @@ function renderCard(ch){
   description.push('ROOM influence on EQ: '+(r.roomAssessment?.impactOnEQ||'Not confirmed'));
   description.push('ROOM limitation: '+(r.roomAssessment?.limitations||'Unverified room feed'));
  }
- if(!r.reviewComplete)description.push('EQ NOT ready to apply. The AI did not return a sufficiently safe four-band recommendation.');
+ if(data.applied)description.push('APPLIED AND VERIFIED on X32. Listen in the room; post-EQ audio capture remains unverified.');
+ if(!r.reviewComplete&&!data.applied)description.push('EQ NOT ready to apply. The AI did not return a sufficiently safe four-band recommendation.');
  m.textContent=description.join('\n');
  if(r.suggestions?.length===4){
   card.append(eqGraph(data.baseline,r.suggestions));
   const bands=document.createElement('div');bands.style.cssText='font-size:12px;margin:5px 0;color:#bfe7d3;white-space:pre-line';
   bands.textContent=r.suggestions.map(x=>'B'+x.band+' '+x.type+' · '+Math.round(x.frequencyHz)+'Hz · '+x.gainDb+'dB · Q'+Number(x.q).toFixed(2)).join('\n');card.append(bands);
  }
- card.append(apply);apply.disabled=!r.reviewComplete||!data.sourceConfirmed||!!run||applying;
+ card.append(apply);apply.disabled=!r.reviewComplete||!!data.applied||!data.sourceConfirmed||!!run||applying;
  apply.onclick=()=>applyOne(ch,m,apply);
 }
 function stop(){
@@ -186,7 +187,7 @@ async function check(){
   if($('x32-playback-room').checked){if(!window.X32RoomInput)throw Error('Room mic monitor not available');await window.X32RoomInput.ensure()}
   if(controller.signal.aborted)throw new DOMException('Stopped','AbortError');
   const before=await bridge('/api/channel?number='+ch);
-  if(!eqSame(before,before)||before.channel!==ch||before.bands?.length!==4)throw Error('Fresh X32 EQ snapshot unavailable on CH'+ch);
+  if(!eqSame(before,before)||before.channel!==ch||typeof before.eqOn!=='boolean'||before.bands?.length!==4)throw Error('Fresh X32 EQ snapshot unavailable on CH'+ch);
   status('Listening to '+specs[ch].name+'. Capturing 12 seconds of usable program audio…');
   const pcm=await new Promise((resolve,reject)=>{
    const m={resolve,reject,samples:[],floor:-92,started:false,activeSec:0,peak:-120,phase:0,sum:0,count:0};
@@ -240,7 +241,7 @@ async function applyOne(ch,msg,button){
   }
   if(!verified)throw Error('EQ not independently verified within 45 seconds. Check local bridge before next write.');
   msg.textContent='CH'+ch+' EQ applied and verified by X32 readback. PA sound is not independently measured; listen and compare.';
-  reports.delete(ch);
+  data.applied=true;data.review.reviewComplete=false;
  }catch(e){msg.textContent='Apply failed or not verified: '+e.message+' (inspect mixer/restore if needed)'}
  finally{applying=false;updateButtons();renderCard(ch)}
 }
