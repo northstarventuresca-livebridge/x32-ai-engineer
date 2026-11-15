@@ -10,6 +10,7 @@ panel.style.cssText='margin:15px 0;background:#0b2331;border:1px solid #3a7180;b
 panel.innerHTML='<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;align-items:center"><h2 style="margin:0;font-size:19px">Multi-Vocal EQ Analysis</h2><span style="color:#b6d0d9;font-size:12px">Development preview · independent Dante inputs</span></div>'+
 '<p style="color:#aac6d0;font-size:12px;margin:8px 0">Choose up to six verified Dante channels. All selected microphones are captured simultaneously, evaluated individually, and receive independent EQ suggestions. Audio tap position and post-EQ sound are NOT verified.</p>'+
 '<div id="x32-multi-options" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:7px;margin:10px 0"></div>'+
+'<label style="display:block;margin:9px 0;color:#b9e0dd;font-size:13px"><input type="checkbox" id="x32-multi-room"> Use Room Mic <small style="display:block;color:#abc2cc;margin:4px 0 0 22px">Optional · DVS Receive 3-4 (source identity not verified). In worship this is full-mix context, NOT isolated singer or verified post-EQ audio.</small></label>'+
 '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:9px 0"><label for="x32-multi-mode">Analysis:</label><select id="x32-multi-mode"><option value="speaking">Speaking</option><option value="singing">Singing</option></select><button id="x32-multi-go" type="button">Check EQ · Selected Channels</button><button id="x32-multi-stop" type="button" disabled style="border-color:#e48282;color:#ffd6d6">Stop Listening</button></div>'+
 '<div id="x32-multi-state" role="status" style="font-size:12px;color:#b9e3d2">Nothing recording. Select microphones above.</div>'+
 '<div id="x32-multi-results" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:12px"></div>'+
@@ -55,6 +56,7 @@ function updateOptions(){
  }
  $('x32-multi-go').disabled=!!job||applying||!selected.size;
  $('x32-multi-mode').disabled=!!job||applying;
+ $('x32-multi-room').disabled=!!job||applying;
  $('x32-multi-stop').disabled=!job;
 }
 function card(n){
@@ -146,7 +148,7 @@ async function analyzeOne(j,t){
  try{
   const response=await fetch('/api/ai/voice-eq',{
    method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},
-   body:JSON.stringify({channel:t.n,readback:c.baseline,wavBase64:toBase64(asWav(t.samples)),analysisMode:j.mode}),
+   body:JSON.stringify({channel:t.n,readback:c.baseline,wavBase64:toBase64(asWav(t.samples)),analysisMode:j.mode,useRoomMic:j.useRoom,...(j.useRoom?{roomWavBase64:toBase64(t.roomWav)}:{})}),
    signal:j.abort.signal
   });
   const data=await response.json().catch(()=>({error:'AI response was not JSON'}));
@@ -157,8 +159,12 @@ async function analyzeOne(j,t){
     Array.isArray(data.suggestions)&&data.suggestions.length===4&&data.channel===t.n&&
     data.suggestions.every(x=>Number.isInteger(x.band)&&x.band>=1&&x.band<=4&&['PEQ','VEQ','LShv','HShv','LCut','HCut'].includes(x.type)&&Number.isFinite(x.frequencyHz)&&x.frequencyHz>=20&&x.frequencyHz<=20000&&Number.isFinite(x.gainDb)&&Math.abs(x.gainDb)<=15&&Number.isFinite(x.q)&&x.q>=.3&&x.q<=10);
   c.info.textContent=(reliable?'Voice sufficiently audible · ready for operator review':'Vocal not confidently isolated · no EQ apply')+
-    ' · '+String(data.confidence||'low')+' confidence · PRE/POST-EQ TAP UNVERIFIED';
+    ' · '+String(data.confidence||'low')+' confidence · '+(data.roomMicUsed?'ROOM CONTEXT (FULL MIX, UNVERIFIED TAP)':'ROOM OFF')+' · PRE/POST-EQ TAP UNVERIFIED';
   const lines=[data.summary||'No conclusion'];
+  if(data.roomMicUsed){
+   lines.push(j.mode==='singing'?"Room recording captures the whole worship mix, not an isolated singer.":"Room recording adds ambient context, not proof of post-EQ microphone sound.");
+   if(data.roomQuality)lines.push('Room: '+data.roomQuality.peakDbfs+' dBFS peak / '+data.roomQuality.rmsDbfs+' dBFS RMS.');
+  }
   for(const o of data.audibleFindings||[])lines.push('• '+String(o).slice(0,180));
   if(reliable)for(const x of data.suggestions)lines.push('B'+x.band+' · '+Math.round(x.frequencyHz)+' Hz · '+x.gainDb+' dB · Q '+Number(x.q).toFixed(2));
   c.notes.textContent=lines.join('\n');
@@ -175,6 +181,27 @@ async function analyzeOne(j,t){
  }finally{
   t.done=true;t.samples=[];finishIfDone(j);
  }
+}
+
+function appendRoom(j,data,sr){
+ const step=sr/RATE;
+ for(let i=0;i<data.length;i++){
+  const v=Number.isFinite(data[i])?data[i]:0;
+  j.roomPeak=Math.max(j.roomPeak,20*Math.log10(Math.max(1e-8,Math.abs(v))));
+  j.roomSum+=v;j.roomN++;j.roomPhase++;
+  if(j.roomPhase>=step){
+   j.roomRing[j.roomIndex]=j.roomSum/j.roomN;
+   j.roomIndex=(j.roomIndex+1)%COUNT;j.roomCount=Math.min(COUNT,j.roomCount+1);
+   j.roomPhase-=step;j.roomSum=0;j.roomN=0;
+  }
+ }
+}
+function roomSnapshot(j){
+ if(j.roomCount<RATE*8)throw Error('Room DVS Receive 3-4 supplied fewer than eight seconds of audio');
+ if(j.roomPeak<-88)throw Error('Room input silent (peak '+j.roomPeak.toFixed(1)+' dBFS). Verify DVS Receive 3-4 carries the room microphone.');
+ const size=j.roomCount,pcm=new Float32Array(size);
+ for(let i=0;i<size;i++)pcm[i]=j.roomRing[(j.roomIndex-size+i+COUNT)%COUNT];
+ return asWav(pcm);
 }
 function ingest(j,t,data,sr){
  if(t.done||t.captured||!data||!data.length)return;
@@ -202,6 +229,7 @@ function ingest(j,t,data,sr){
  if(t.samples.length>=COUNT){
   if(t.activeSec>=3.5&&t.maxPeak>-76){
    t.captured=true;
+   if(j.useRoom){try{t.roomWav=roomSnapshot(j)}catch(e){t.done=true;const c=card(t.n);c.info.textContent='Room Mic enabled but unavailable';c.notes.textContent=e.message+' · No EQ analysis sent for CH'+t.n;c.apply.disabled=true;finishIfDone(j);return;}}
    analyzeOne(j,t);
    if([...j.tracks.values()].every(other=>other.done||other.captured))destroyAudio(j);
   }else{
@@ -215,8 +243,8 @@ async function start(){
  if(!window.isSecureContext){status('Microphone access requires HTTPS.');return;}
  if(!bridgeKey()){status('Connect the Windows mixer bridge first.');return;}
  const id=++sessionId,abort=new AbortController();
- const j={id,abort,mode:$('x32-multi-mode').value,channels:[...selected].sort((a,b)=>a-b),
-  ctx:null,streams:[],processors:[],tracks:new Map(),clock:null,timeout:null,audioClosed:false};
+ const j={id,abort,mode:$('x32-multi-mode').value,useRoom:$('x32-multi-room').checked,channels:[...selected].sort((a,b)=>a-b),
+  ctx:null,streams:[],processors:[],tracks:new Map(),clock:null,timeout:null,audioClosed:false,roomRing:new Float32Array(COUNT),roomIndex:0,roomCount:0,roomPeak:-120,roomPhase:0,roomSum:0,roomN:0};
  job=j;cards.clear();$('x32-multi-results').replaceChildren();updateOptions();
  status('Opening verified DVS receive pairs; no mixer routing changes…');
  try{
@@ -236,7 +264,7 @@ async function start(){
    sources=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='audioinput');
   }
   j.ctx=new AudioContext();
-  const unique=[...new Set(initial.map(x=>x.pair))];
+  const unique=[...new Set([...initial.map(x=>x.pair),...(j.useRoom?[3]:[])])];
   for(const pair of unique){
    if(job!==j)return;
    const dev=sources.find(d=>labelPair(d.label,pair));
@@ -249,6 +277,7 @@ async function start(){
    j.processors.push({input,processor,mute});
    processor.onaudioprocess=e=>{
     if(job!==j||j.abort.signal.aborted)return;
+    if(j.useRoom&&pair===3&&e.inputBuffer.numberOfChannels>0)appendRoom(j,e.inputBuffer.getChannelData(0),j.ctx.sampleRate);
     for(const info of initial.filter(x=>x.pair===pair)){
      if(e.inputBuffer.numberOfChannels<=info.lane){const t=j.tracks.get(info.n);if(t&&!t.done){t.done=true;card(info.n).info.textContent='Stereo channel not present in DVS device';finishIfDone(j)}continue}
      ingest(j,j.tracks.get(info.n),e.inputBuffer.getChannelData(info.lane),j.ctx.sampleRate);
@@ -258,7 +287,7 @@ async function start(){
   for(const info of initial)j.tracks.set(info.n,{n:info.n,done:false,captured:false,samples:[],noise:-92,started:false,tries:0,activeSec:0,maxPeak:-120,phase:0,sum:0,count:0});
   await j.ctx.resume();
   if(job!==j)return;
-  status('Listening to '+j.channels.length+' separate Dante microphones simultaneously · '+j.mode+'. Waiting for clear vocal samples…');
+  status('Listening to '+j.channels.length+' independent Dante microphones · '+j.mode+(j.useRoom?' · optional room full-mix context ON':' · room mic OFF')+'. Waiting for clear vocal samples…');
   j.clock=setInterval(()=>{
    if(job!==j)return;
    const running=[...j.tracks.values()].filter(t=>!t.done&&!t.captured);
