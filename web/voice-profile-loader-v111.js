@@ -49,8 +49,7 @@ button.onclick=async()=>{
     !hpf||typeof hpf.on!=='boolean'||!Number.isFinite(hpf.frequencyHz)){
     say('Saved EQ settings are not compatible with the mixer bridge.');return
  }
- if(p.eq.eqOn!==true){say('This saved profile has EQ disabled. Automatic EQ ON/OFF recall is not available.');return}
- const prompt='Load saved EQ "'+p.name+'" onto physical X32 CH'+n+'?\n\nThis immediately changes four EQ bands and HPF for CH'+n+' only. The current EQ will be backed up first. You can stop or restore if needed.\n\nContinue?';
+ const prompt='Load saved EQ "'+p.name+'" onto physical X32 CH'+n+'?\n\nThis immediately changes four EQ bands and HPF for CH'+n+' only. The existing per-channel rollback snapshot is preserved. You can stop or restore if needed.\n\nContinue?';
  if(!window.confirm(prompt))return;
  button.disabled=true;
  try{
