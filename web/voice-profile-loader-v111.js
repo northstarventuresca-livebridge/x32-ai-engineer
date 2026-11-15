@@ -2,10 +2,11 @@
 const $=id=>document.getElementById(id),one=$('x32-one-ui'),engine=window.X32UnifiedEngine;
 if(!one||!engine||$('x32-one-profile'))return;
 const box=document.createElement('div');box.id='x32-one-profile';box.hidden=true;
-box.innerHTML='<label for="x32-one-profile-list">Saved EQ starting point</label><select id="x32-one-profile-list"><option value="">No saved profile</option></select><button type="button" id="x32-one-profile-load">Load EQ</button><span id="x32-one-profile-status" role="status"></span>';
+box.innerHTML='<label for="x32-one-profile-list">Saved EQ starting point</label><select id="x32-one-profile-list"><option value="">No saved profile</option></select><button type="button" id="x32-one-profile-fast">Fast Load EQ</button><button type="button" id="x32-one-profile-gradual">Gradual Load EQ</button><button type="button" id="x32-one-profile-stop" hidden>Stop EQ Load</button><span id="x32-one-profile-status" role="status"></span>';
 one.querySelector('.x32-one-room')?.before(box);
 let profiles=[];
-const picker=$('x32-one-profile-list'),button=$('x32-one-profile-load'),msg=$('x32-one-profile-status');
+const picker=$('x32-one-profile-list'),fast=$('x32-one-profile-fast'),gradual=$('x32-one-profile-gradual'),halt=$('x32-one-profile-stop'),msg=$('x32-one-profile-status');
+let loading=false, stopRequested=false;
 const say=text=>{msg.textContent=text;};
 async function reload(){
  try{
@@ -35,8 +36,8 @@ async function bridge(path,method='GET',body){
  if(!r.ok)throw Error(v.error||'Mixer bridge HTTP '+r.status);
  return v;
 }
-button.onclick=async()=>{
- if(button.disabled)return;
+async function loadProfile(speed){
+ if(loading)return;
  const ids=engine.selected(),p=profiles.find(x=>x.id===picker.value);
  if(ids.length!==1){say('Select exactly one microphone before loading a saved EQ.');return}
  if(!p){say('Choose a saved profile.');return}
@@ -49,9 +50,10 @@ button.onclick=async()=>{
     !hpf||typeof hpf.on!=='boolean'||!Number.isFinite(hpf.frequencyHz)){
     say('Saved EQ settings are not compatible with the mixer bridge.');return
  }
- const prompt='Load saved EQ "'+p.name+'" onto physical X32 CH'+n+'?\n\nThis immediately changes four EQ bands and HPF for CH'+n+' only. The existing per-channel rollback snapshot is preserved. You can stop or restore if needed.\n\nContinue?';
+ const gradualMode=speed==='slow';
+ const prompt=(gradualMode?'Gradually':'Immediately')+' load saved EQ "'+p.name+'" onto physical X32 CH'+n+'?\n\n'+(gradualMode?'Gain changes will ramp in steps. Filter types, frequency, Q and HPF update individually.':'All saved EQ bands and HPF will be applied as quickly as the mixer verifies each write.')+'\n\nOnly CH'+n+' changes. Your existing per-channel rollback snapshot is preserved.';
  if(!window.confirm(prompt))return;
- button.disabled=true;
+ loading=true;stopRequested=false;fast.disabled=true;gradual.disabled=true;halt.hidden=false;halt.disabled=false;
  try{
   say('Preparing verified X32 EQ readback…');
   const st=await bridge('/api/eq/status?channel='+n);
@@ -59,22 +61,33 @@ button.onclick=async()=>{
   const prep=await bridge('/api/eq/prepare?channel='+n);
   if(!prep?.nonce||prep?.current?.channel!==n)throw Error('Fresh EQ snapshot not available');
   const recommendations=b.map((x,i)=>({band:i+1,type:x.type,frequencyHz:x.frequencyHz,gainDb:x.gainDb,q:x.q}));
-  say('Applying saved EQ to CH'+n+'…');
+  say((gradualMode?'Gradually loading ':'Fast loading ')+p.name+' to CH'+n+'…');
   await bridge('/api/eq/apply','POST',{channel:n,nonce:prep.nonce,
     recommendations,hpf:{on:hpf.on,frequencyHz:hpf.frequencyHz},
-    speed:'aggressive',ack:'CONFIRM_REAL_X32_EQ_WRITE'});
+    speed,ack:'CONFIRM_REAL_X32_EQ_WRITE'});
   let verified=false;
-  for(let i=0;i<75;i++){
+  for(let i=0;i<(gradualMode?190:95);i++){
    await new Promise(done=>setTimeout(done,900));
    const s=await bridge('/api/eq/status?channel='+n),j=s.job||{};
    if(j.channel!==n)throw Error('A different mixer operation took over');
+   if(stopRequested)throw Error('Stop requested; check mixer before restoring');
+   if(j.status==='running')say((gradualMode?'Gradual':'Fast')+' EQ load · '+Math.min(4,Math.floor((j.step||0)/4))+'/4 bands applied…');
    if(j.status==='verified'){verified=true;break}
    if(j.status==='failed'||j.status==='stopped')throw Error(j.error||'Mixer rejected EQ settings');
   }
   if(!verified)throw Error('EQ readback verification timed out');
-  say('✓ '+p.name+' loaded and verified on CH'+n+'. Choose Check EQ to refine it.');
+  say('✓ '+p.name+' '+(gradualMode?'gradually':'quickly')+' loaded and verified on CH'+n+'. Choose Check EQ to refine it.');
  }catch(err){say('Saved EQ not loaded: '+String(err.message||err))}
- finally{button.disabled=false}
+ finally{loading=false;fast.disabled=false;gradual.disabled=false;halt.hidden=true;halt.disabled=false;}
+};
+fast.onclick=()=>loadProfile('instant');
+gradual.onclick=()=>loadProfile('slow');
+halt.onclick=async()=>{
+ if(!loading)return;
+ stopRequested=true;halt.disabled=true;
+ say('Requesting EQ load stop…');
+ try{await bridge('/api/eq/stop','POST',{});say('Stop requested. Current X32 settings may be partially updated; use Restore if needed.');}
+ catch(e){say('Could not confirm stop: '+String(e.message||e));}
 };
 reload();
 })();
