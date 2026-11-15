@@ -72,6 +72,44 @@ function card(n){
  $('x32-multi-results').appendChild(el);
  const obj={el,info,notes,apply,baseline:null,report:null};cards.set(n,obj);return obj;
 }
+
+function eqOverlay(original,recommended){
+ const bands=original.bands.map(x=>({...x}));
+ for(const s of recommended){const b=bands[s.band-1];if(b)Object.assign(b,{type:s.type,frequencyHz:s.frequencyHz,gainDb:s.gainDb,q:s.q});}
+ const clamp=(v,a,b)=>Math.max(a,Math.min(v,b));
+ const resp=(set,f)=>{
+  let result=0;
+  for(const b of set){
+   const g=Number(b.gainDb)||0,c=clamp(Number(b.frequencyHz)||1000,20,20000),q=clamp(Number(b.q)||1,.3,10),z=Math.log2(f/c);
+   if(b.type==='HCut')result+=-10*Math.log10(1+Math.pow(f/c,8));
+   else if(b.type==='LCut')result+=-10*Math.log10(1+Math.pow(c/f,8));
+   else if(b.type==='HShv')result+=g/(1+Math.exp(-5*z));
+   else if(b.type==='LShv')result+=g/(1+Math.exp(5*z));
+   else result+=g*Math.exp(-.5*Math.pow(z/(.7/q),2));
+  }
+  if(original.hpf?.on)result+=-10*Math.log10(1+Math.pow((Number(original.hpf.frequencyHz)||90)/f,8));
+  return clamp(result,-20,20);
+ };
+ const curve=set=>Array.from({length:141},(_,i)=>{
+  const f=40*Math.pow(18000/40,i/140),db=resp(set,f);
+  return (i?'L':'M')+(38+i*3.8).toFixed(2)+','+(109-db*2.1).toFixed(2);
+ }).join(' ');
+ const d=document.createElement('div');d.style.cssText='margin:10px 0;padding:8px;border:1px solid #375866;border-radius:9px;background:#081c27';
+ const leg=document.createElement('div');leg.style.cssText='display:flex;gap:14px;flex-wrap:wrap;font-size:11px;font-weight:700';
+ const current=document.createElement('span');current.style.color='#ff7474';current.textContent='━━ Current EQ';
+ const proposed=document.createElement('span');proposed.style.color='#62ef9b';proposed.textContent='━━ Suggested EQ';
+ leg.append(current,proposed);
+ const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+ svg.setAttribute('viewBox','0 0 590 153');svg.style.cssText='width:100%;height:auto;display:block';
+ for(const [path,color,width] of [[curve(original.bands),'#ff5555','4.5'],[curve(bands),'#58ea90','2.8']]){
+  const p=document.createElementNS('http://www.w3.org/2000/svg','path');
+  p.setAttribute('d',path);p.setAttribute('fill','none');p.setAttribute('stroke',color);p.setAttribute('stroke-width',width);svg.appendChild(p);
+ }
+ const caption=document.createElement('div');caption.textContent='Calculated EQ response only; NOT measured post-EQ microphone or room sound.';
+ caption.style.cssText='font-size:10px;color:#a9bdc7';
+ d.append(leg,svg,caption);return d;
+}
+
 function asWav(pcm){
  const buf=new ArrayBuffer(44+pcm.length*2),v=new DataView(buf),b=new Uint8Array(buf);
  const word=(p,str)=>{for(let i=0;i<str.length;i++)b[p+i]=str.charCodeAt(i)};
@@ -115,15 +153,20 @@ async function analyzeOne(j,t){
   if(job!==j)return;
   if(!response.ok)throw Error(data.error||'AI review HTTP '+response.status);
   c.report=data;
-  const reliable=data.voiceDetected===true&&data.confidence!=='low'&&data.reviewComplete===true&&
+  const reliable=data.voiceDetected===true&&['medium','high'].includes(data.confidence)&&data.reviewComplete===true&&
     Array.isArray(data.suggestions)&&data.suggestions.length===4&&data.channel===t.n&&
-    data.suggestions.every(x=>Number.isInteger(x.band)&&x.band>=1&&x.band<=4&&Number.isFinite(x.frequencyHz)&&Number.isFinite(x.gainDb)&&Number.isFinite(x.q));
+    data.suggestions.every(x=>Number.isInteger(x.band)&&x.band>=1&&x.band<=4&&['PEQ','VEQ','LShv','HShv','LCut','HCut'].includes(x.type)&&Number.isFinite(x.frequencyHz)&&x.frequencyHz>=20&&x.frequencyHz<=20000&&Number.isFinite(x.gainDb)&&Math.abs(x.gainDb)<=15&&Number.isFinite(x.q)&&x.q>=.3&&x.q<=10);
   c.info.textContent=(reliable?'Voice sufficiently audible · ready for operator review':'Vocal not confidently isolated · no EQ apply')+
     ' · '+String(data.confidence||'low')+' confidence · PRE/POST-EQ TAP UNVERIFIED';
   const lines=[data.summary||'No conclusion'];
   for(const o of data.audibleFindings||[])lines.push('• '+String(o).slice(0,180));
   if(reliable)for(const x of data.suggestions)lines.push('B'+x.band+' · '+Math.round(x.frequencyHz)+' Hz · '+x.gainDb+' dB · Q '+Number(x.q).toFixed(2));
   c.notes.textContent=lines.join('\n');
+  c.el.querySelector('.x32-multi-overlay')?.remove();
+  if(reliable){
+   const canvas=eqOverlay(c.baseline,data.suggestions);canvas.className='x32-multi-overlay';
+   c.notes.after(canvas);
+  }
   c.apply.disabled=!reliable;
  }catch(e){
   if(job!==j)return;
@@ -134,7 +177,7 @@ async function analyzeOne(j,t){
  }
 }
 function ingest(j,t,data,sr){
- if(t.done||!data||!data.length)return;
+ if(t.done||t.captured||!data||!data.length)return;
  let ss=0,pk=0;
  for(let i=0;i<data.length;i++){const x=data[i];ss+=x*x;pk=Math.max(pk,Math.abs(x))}
  const rms=20*Math.log10(Math.max(1e-8,Math.sqrt(ss/data.length)));
@@ -158,8 +201,9 @@ function ingest(j,t,data,sr){
  if(t.samples.length%RATE<240)c.info.textContent='Listening · '+Math.floor(t.samples.length/RATE)+'/12 sec · live vocal activity '+t.activeSec.toFixed(1)+' sec';
  if(t.samples.length>=COUNT){
   if(t.activeSec>=3.5&&t.maxPeak>-76){
-   t.done=true;
+   t.captured=true;
    analyzeOne(j,t);
+   if([...j.tracks.values()].every(other=>other.done||other.captured))destroyAudio(j);
   }else{
    t.tries++;clearRecorder(t);
    c.info.textContent='Mic may contain silence or bleed. Waiting for stronger vocal activity · retry '+t.tries;
@@ -211,19 +255,19 @@ async function start(){
     }
    };
   }
-  for(const info of initial)j.tracks.set(info.n,{n:info.n,done:false,samples:[],noise:-92,started:false,tries:0,activeSec:0,maxPeak:-120,phase:0,sum:0,count:0});
+  for(const info of initial)j.tracks.set(info.n,{n:info.n,done:false,captured:false,samples:[],noise:-92,started:false,tries:0,activeSec:0,maxPeak:-120,phase:0,sum:0,count:0});
   await j.ctx.resume();
   if(job!==j)return;
   status('Listening to '+j.channels.length+' separate Dante microphones simultaneously · '+j.mode+'. Waiting for clear vocal samples…');
   j.clock=setInterval(()=>{
    if(job!==j)return;
-   const running=[...j.tracks.values()].filter(t=>!t.done);
+   const running=[...j.tracks.values()].filter(t=>!t.done&&!t.captured);
    if(running.length)status('Listening · '+running.length+' microphone(s) still gathering clear samples; analyzed channels appear below as they finish.');
   },3000);
   j.timeout=setTimeout(()=>{
    if(job!==j)return;
    for(const t of j.tracks.values())if(!t.done){
-    t.done=true;t.samples=[];const c=card(t.n);
+    t.done=true;t.captured=true;t.samples=[];const c=card(t.n);
     c.info.textContent='No sufficiently strong microphone sample in 75 seconds';
     c.notes.textContent='Not analyzed; microphone quiet or vocal not confidently above noise/bleed. No changes proposed.';
     c.apply.disabled=true;
