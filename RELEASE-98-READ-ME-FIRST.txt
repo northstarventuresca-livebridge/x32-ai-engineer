@@ -1,0 +1,49 @@
+X32 AI ENGINEER — MULTI VOCAL RELEASE 98
+==========================================
+
+Windows launch package | November 15, 2026
+
+WHAT TO RUN
+-----------
+1. Extract this entire ZIP to a folder on your Windows PC.
+2. Close any older X32 AI Engineer bridge console first.
+3. Double-click START-X32-ENGINEER.cmd in the TOP folder.
+4. The bridge will open your browser to:
+   https://x32-ai-engineer-church.globalconnectionschurch.workers.dev/
+
+REQUIREMENTS
+------------
+- Windows and Python 3.10+ (same requirements as previous working bridge).
+- Your existing X32 on the verified LAN, Dante Virtual Soundcard (DVS),
+  and Chrome microphone permissions for your DVS receive devices.
+- Cloudflare Access sign-in for the dashboard.
+
+WHAT'S NEW IN RELEASE 98
+------------------------
+- Multi-select up to six mapped vocal microphones at once.
+- Independent Dante audio sampling, speaking or singing mode.
+- Waiting for candidate vocal activity before sending samples.
+- Stop Listening for speaking, singing, or multi-select checks.
+- Individual per-channel EQ result cards, modeled red/green curves.
+- Per-channel Apply button with explicit confirmation and fresh EQ readback.
+- Post-EQ audio monitoring is still NOT verified.
+
+KNOWN-GOOD & SAFETY
+-------------------
+- Existing Windows bridge Python file is unchanged (same as prior release).
+- Server/dashboard live Worker: version 98
+  f0abf328-698f-482f-a725-afa73685021f
+- Previous known-good Worker version 96 remains available for rollback:
+  b4704aef-a811-48db-949c-9484b0793022
+- Launch does not write EQ. Only operator-approved Apply will write a channel.
+- Download package does not alter X32 or Dante routing.
+- Stop Listening stops analysis. If physical EQ writes are already underway,
+  use the separate STOP EQ write control.
+
+IMPORTANT
+---------
+A loud signal cannot by itself prove an isolated singer versus stage bleed.
+Vocal recognition and all post-EQ listening still need real-world verification.
+
+The new features are on the LIVE WEB DASHBOARD. No separate local Dante
+routing software or extra Windows bridge modification is required.
