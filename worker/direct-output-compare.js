@@ -28,7 +28,7 @@ async function x32CompareOutput(request,env){
    sq+=partial;powers.push(20*Math.log10(Math.max(1e-9,Math.sqrt(partial/len))));
   }
   const sorted=[...powers].sort((a,b)=>a-b),floor=sorted[Math.floor(sorted.length*.15)]||-120;
-  const activity=powers.filter(v=>v>Math.max(-84,floor+8)).length*.02;
+  const activity=powers.filter(v=>v>Math.max(-84,floor+8)||v>-76).length*.02;
   const quality={durationSeconds:+duration.toFixed(1),peakDbfs:+(20*Math.log10(Math.max(1e-9,peak))).toFixed(1),rmsDbfs:+(20*Math.log10(Math.max(1e-9,Math.sqrt(sq/count)))).toFixed(1),activitySeconds:+activity.toFixed(1)};
   if(quality.peakDbfs>-.5)throw Error(label+' is clipping; no recommendation allowed');
   if(quality.peakDbfs<-82||activity<1.5)throw Error(label+' is too quiet for comparison');
