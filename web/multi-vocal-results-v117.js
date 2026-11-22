@@ -339,7 +339,7 @@ async function analyzeOne(j,t){
   }
   if(reliable&&!changed)c.notes.textContent='AI check completed successfully. The suggested four-band EQ matches the existing settings within the mixer comparison tolerances. No EQ change is recommended.\n'+c.notes.textContent;
   x32CompareResults(c,data,reliable);
-  c.apply.disabled=!reliable||!changed;
+  c.apply.disabled=!reliable||!changed||c.baseline?.eqReadbackFresh===false;
  }catch(e){
   if(job!==j)return;
   c.resultState='failed';c.report=null;c.apply.disabled=true;
@@ -414,8 +414,24 @@ async function start(){
   if(j.useRoom){if(!window.X32RoomInput)throw Error('Room meter not initialized');await window.X32RoomInput.ensure();}
   const initial=await Promise.all(j.channels.map(async n=>{
    const rb=await bridge('/api/channel?number='+n+'&dynamics=1');
-   if(rb?.channel!==n||!Array.isArray(rb.bands)||rb.bands.length!==4)throw Error('CH'+n+' EQ readback unavailable');
-   card(n).baseline=rb;return{n,rx:window.X32DanteRx(n),lane:window.X32DanteLane(n),pair:mappedPair(n)};
+   if(rb?.channel!==n)throw Error('CH'+n+' channel metadata unavailable');
+   let baseline=rb;
+   try{
+     const fresh=await bridge('/api/eq/prepare?channel='+n);
+     const current=fresh?.current;
+     if(current?.channel!==n||!Array.isArray(current.bands)||current.bands.length!==4||
+       current.bands.some(x=>!Number.isFinite(x.frequencyHz)||!Number.isFinite(x.gainDb)||!Number.isFinite(x.q)||typeof x.type!=='string'))
+       throw Error('fresh X32 EQ readback incomplete');
+     baseline={...rb,...current,eqOn:true,gate:rb.gate,compressor:rb.compressor};
+   }catch(err){
+     // Allow an advisory when fresh reads are not available, but never allow
+     // the Apply button to imply a stale or unverified EQ baseline is safe.
+     baseline={...rb,eqReadbackFresh:false};
+     card(n).info.textContent='CH'+n+' fresh X32 EQ unavailable: '+String(err.message||err)+'. Apply will be blocked until verified.';
+   }
+   baseline.eqReadbackFresh=baseline.eqReadbackFresh!==false;
+   card(n).baseline=baseline;
+   return{n,rx:window.X32DanteRx(n),lane:window.X32DanteLane(n),pair:mappedPair(n)};
   }));
   if(job!==j)return;
   const stopOld=$('x32-listen-stop');if(stopOld&&!stopOld.disabled)stopOld.click();
@@ -492,6 +508,7 @@ async function applyOne(n,button,info,speed){
  if(job||applying||!['instant','slow'].includes(speed))return;
  const c=cards.get(n),r=c?.report;
  if(c?.eqApplied){info.textContent='Already applied to CH'+n+'. Run Check EQ again before applying further changes.';return;}
+ if(c?.baseline?.eqReadbackFresh===false){info.textContent='Cannot apply: X32 EQ baseline was not freshly verified. Run Check EQ when the mixer responds.';return;}
  if(!r?.reviewComplete||!r.voiceDetected||r.confidence==='low'||r.channel!==n||!Array.isArray(r.suggestions)||r.suggestions.length!==4){
   info.textContent='No eligible verified voice recommendation for this channel';return;
  }
